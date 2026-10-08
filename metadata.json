@@ -1,0 +1,6 @@
+{
+  "name": "HomeHelp",
+  "description": "On-demand home services marketplace for cleaning, repairs, electrical, painting, and plumbing in Hyderabad.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
