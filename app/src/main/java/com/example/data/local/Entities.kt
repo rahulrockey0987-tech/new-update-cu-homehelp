@@ -238,10 +238,15 @@ data class UserEntity(
     val phone: String,
     val email: String,
     val passwordHash: String,
-    val city: String,
-    val primaryArea: String,
-    val registeredAt: Long,
-    val isLoggedIn: Boolean
+    val passwordSalt: String = "",
+    val city: String = "Hyderabad",
+    val primaryArea: String = "",
+    val phoneVerified: Boolean = true,
+    val role: String = "customer",
+    val accountStatus: String = "active",
+    val authToken: String? = null,
+    val registeredAt: Long = System.currentTimeMillis(),
+    val isLoggedIn: Boolean = false
 ) {
     fun toDomain(): com.example.data.model.CustomerUser = com.example.data.model.CustomerUser(
         id = id,
@@ -250,18 +255,33 @@ data class UserEntity(
         email = email,
         city = city,
         primaryArea = primaryArea,
+        phoneVerified = phoneVerified,
+        role = role,
+        accountStatus = accountStatus,
+        authToken = authToken,
         registeredAt = registeredAt
     )
 
     companion object {
-        fun fromDomain(user: com.example.data.model.CustomerUser, passwordHash: String, isLoggedIn: Boolean): UserEntity = UserEntity(
+        fun fromDomain(
+            user: com.example.data.model.CustomerUser,
+            passwordHash: String,
+            passwordSalt: String = "",
+            isLoggedIn: Boolean = false,
+            authToken: String? = user.authToken
+        ): UserEntity = UserEntity(
             id = user.id,
             name = user.name,
             phone = user.phone,
             email = user.email,
             passwordHash = passwordHash,
+            passwordSalt = passwordSalt,
             city = user.city,
             primaryArea = user.primaryArea,
+            phoneVerified = user.phoneVerified,
+            role = user.role,
+            accountStatus = user.accountStatus,
+            authToken = authToken,
             registeredAt = user.registeredAt,
             isLoggedIn = isLoggedIn
         )

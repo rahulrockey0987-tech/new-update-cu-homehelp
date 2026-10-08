@@ -1,17 +1,36 @@
 package com.example.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.HomeRepairService
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -37,6 +56,10 @@ import com.example.ui.screens.partner.HirePartnerScreen
 import com.example.ui.screens.search.SearchScreen
 import com.example.ui.screens.service.ServiceDetailScreen
 import com.example.ui.screens.tracking.BookingTrackingScreen
+import com.example.ui.theme.BrandTealDark
+import com.example.ui.theme.BrandTealPrimary
+import com.example.ui.theme.Slate500
+import com.example.ui.theme.Slate900
 
 @Composable
 fun HomeHelpApp(
@@ -47,6 +70,8 @@ fun HomeHelpApp(
     val currentRoute = navBackStackEntry?.destination?.route
     val snackbarHostState = remember { SnackbarHostState() }
     val userMessage by viewModel.userMessage.collectAsStateWithLifecycle()
+    val activeUser by viewModel.activeUser.collectAsStateWithLifecycle()
+    val isSessionChecked by viewModel.isSessionChecked.collectAsStateWithLifecycle()
 
     LaunchedEffect(userMessage) {
         userMessage?.let {
@@ -55,6 +80,74 @@ fun HomeHelpApp(
         }
     }
 
+    // 1. Session checking splash
+    if (!isSessionChecked) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surface),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(BrandTealPrimary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.HomeRepairService,
+                        contentDescription = "HomeHelp Logo",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "HomeHelp",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                    color = Slate900
+                )
+                Text(
+                    text = "Hyderabad's On-Demand Home Services",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Slate500
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                CircularProgressIndicator(
+                    color = BrandTealPrimary,
+                    modifier = Modifier.size(32.dp),
+                    strokeWidth = 3.dp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Checking customer session...",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Slate500
+                )
+            }
+        }
+        return
+    }
+
+    // 2. MANDATORY LOGIN GUARD: If customer is not authenticated, show AuthScreen ONLY.
+    // Customers cannot access Home, Explore, Hire Partner, Bookings, Profile or any feature until authenticated.
+    if (activeUser == null) {
+        AuthScreen(
+            viewModel = viewModel,
+            onAuthSuccess = {
+                // activeUser flow will emit the logged-in user, automatically transitioning to Customer Home
+            },
+            onBack = null
+        )
+        return
+    }
+
+    // 3. Authenticated customer experience with Protected Routes
     val isTopLevelScreen = currentRoute in listOf(
         Screen.Home.route,
         Screen.Search.route,
@@ -143,7 +236,9 @@ fun HomeHelpApp(
                         onNavigateToNotifications = { navController.navigate(Screen.Notifications.route) },
                         onNavigateToSupport = { navController.navigate(Screen.Support.route) },
                         onNavigateToReviews = { navController.navigate(Screen.Reviews.route) },
-                        onNavigateToAuth = { navController.navigate(Screen.Auth.route) }
+                        onNavigateToAuth = {
+                            navController.navigate(Screen.Auth.route)
+                        }
                     )
                 }
 

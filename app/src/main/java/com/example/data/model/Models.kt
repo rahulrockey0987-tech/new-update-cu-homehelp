@@ -48,6 +48,10 @@ data class CustomerUser(
     val email: String,
     val city: String = "Hyderabad",
     val primaryArea: String = "Madhapur, Hyderabad",
+    val phoneVerified: Boolean = true,
+    val role: String = "customer",
+    val accountStatus: String = "active",
+    val authToken: String? = null,
     val registeredAt: Long = System.currentTimeMillis()
 )
 

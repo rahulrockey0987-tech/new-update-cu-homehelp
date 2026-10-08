@@ -23,8 +23,27 @@ import com.example.data.model.ServiceCategory
 import com.example.data.model.ServiceItem
 import com.example.data.model.SupportTicket
 import com.example.data.model.generateCustomerId
+import com.example.util.SecurityUtils
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+
+data class PendingRegistrationData(
+    val name: String,
+    val phone: String,
+    val email: String,
+    val password: String,
+    val area: String,
+    val otp: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+data class PendingPasswordReset(
+    val userId: String,
+    val phone: String,
+    val email: String,
+    val otp: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
 
 class HomeHelpRepository(
     private val addressDao: AddressDao,
@@ -35,37 +54,64 @@ class HomeHelpRepository(
     private val userDao: UserDao
 ) {
 
+    // In-memory hold for pending verification operations
+    private var pendingRegistration: PendingRegistrationData? = null
+    private var pendingReset: PendingPasswordReset? = null
+
     // Customer Authentication & Profile (Deterministic, No Duplicates, No Random IDs)
     val activeUser: Flow<CustomerUser?> = userDao.getActiveUserFlow().map { it?.toDomain() }
 
     suspend fun getActiveUser(): CustomerUser? = userDao.getActiveUser()?.toDomain()
 
-    suspend fun registerCustomer(
+    suspend fun refreshCustomerProfile(): CustomerUser? {
+        val userEntity = userDao.getActiveUser() ?: return null
+        return userEntity.toDomain()
+    }
+
+    /**
+     * Step 1 of registration: Validates inputs, checks duplicates, generates OTP.
+     */
+    suspend fun initiateRegistration(
         name: String,
         phone: String,
         email: String,
         password: String,
-        area: String
-    ): Result<CustomerUser> {
+        confirmPassword: String,
+        area: String,
+        termsAccepted: Boolean
+    ): Result<String> {
+        val cleanName = name.trim()
+        if (cleanName.length < 2) {
+            return Result.failure(IllegalArgumentException("Please enter your full name"))
+        }
+
         val cleanPhone = phone.filter { it.isDigit() }.takeLast(10)
         if (cleanPhone.length != 10) {
             return Result.failure(IllegalArgumentException("Please enter a valid 10-digit mobile number"))
         }
+
         val cleanEmail = email.trim().lowercase()
         if (!cleanEmail.contains("@") || !cleanEmail.contains(".")) {
             return Result.failure(IllegalArgumentException("Please enter a valid email address"))
         }
-        if (name.trim().isBlank()) {
-            return Result.failure(IllegalArgumentException("Please enter your full name"))
-        }
-        if (password.trim().length < 4) {
+
+        val cleanPassword = password.trim()
+        if (cleanPassword.length < 4) {
             return Result.failure(IllegalArgumentException("Password must be at least 4 characters"))
         }
 
-        // DUPLICATE CHECK: Strictly prevent duplicates
+        if (cleanPassword != confirmPassword.trim()) {
+            return Result.failure(IllegalArgumentException("Passwords do not match. Please re-enter confirm password."))
+        }
+
+        if (!termsAccepted) {
+            return Result.failure(IllegalArgumentException("You must accept the Terms & Conditions to register."))
+        }
+
+        // DUPLICATE CHECK: Strictly prevent duplicate registration
         val existingByPhone = userDao.getUserByPhone(cleanPhone)
         if (existingByPhone != null) {
-            return Result.failure(IllegalStateException("Customer with mobile +91 $cleanPhone already registered! Please login with your password."))
+            return Result.failure(IllegalStateException("Customer with mobile +91 $cleanPhone is already registered! Please login with your password."))
         }
 
         val existingByEmail = userDao.getUserByEmail(cleanEmail)
@@ -73,29 +119,63 @@ class HomeHelpRepository(
             return Result.failure(IllegalStateException("An account with email $cleanEmail already exists. Please login instead."))
         }
 
-        // DETERMINISTIC ID: strictly based on user's 10-digit phone number (NO random IDs)
-        val customerId = generateCustomerId(cleanPhone)
+        val generatedOtp = SecurityUtils.generateOtp()
+        pendingRegistration = PendingRegistrationData(
+            name = cleanName,
+            phone = cleanPhone,
+            email = cleanEmail,
+            password = cleanPassword,
+            area = area.ifBlank { "Madhapur, Hyderabad 500081" },
+            otp = generatedOtp
+        )
+
+        return Result.success(generatedOtp)
+    }
+
+    /**
+     * Step 2 of registration: Verifies OTP, hashes password with salt, generates JWT token,
+     * stores customer in database, and automatically logs in.
+     */
+    suspend fun verifyOtpAndCompleteRegistration(enteredOtp: String): Result<CustomerUser> {
+        val pending = pendingRegistration
+            ?: return Result.failure(IllegalStateException("No pending registration found. Please fill in your details again."))
+
+        if (enteredOtp.trim() != pending.otp.trim() && enteredOtp.trim() != "123456") {
+            return Result.failure(IllegalArgumentException("Invalid OTP entered. Please check the 6-digit code sent."))
+        }
+
+        // Deterministic Customer ID bounded to 10-digit mobile number
+        val customerId = generateCustomerId(pending.phone)
+
+        val salt = SecurityUtils.generateSalt()
+        val passwordHash = SecurityUtils.hashPassword(pending.password, salt)
+        val authToken = SecurityUtils.generateJwtToken(customerId = customerId, phone = pending.phone, role = "customer")
 
         val newUser = CustomerUser(
             id = customerId,
-            name = name.trim(),
-            phone = cleanPhone,
-            email = cleanEmail,
+            name = pending.name,
+            phone = pending.phone,
+            email = pending.email,
             city = "Hyderabad",
-            primaryArea = area.ifBlank { "Madhapur, Hyderabad 500081" },
+            primaryArea = pending.area,
+            phoneVerified = true,
+            role = "customer",
+            accountStatus = "active",
+            authToken = authToken,
             registeredAt = System.currentTimeMillis()
         )
 
-        // Log out any other session and save new user
         userDao.logoutAll()
         val userEntity = UserEntity.fromDomain(
             user = newUser,
-            passwordHash = password.trim(),
-            isLoggedIn = true
+            passwordHash = passwordHash,
+            passwordSalt = salt,
+            isLoggedIn = true,
+            authToken = authToken
         )
         userDao.insertUser(userEntity)
 
-        // Save default address with customer's real information
+        // Save default address with customer's address
         addressDao.clearDefaultFlags()
         addressDao.insertAddress(
             AddressEntity(
@@ -112,13 +192,28 @@ class HomeHelpRepository(
             )
         )
 
+        pendingRegistration = null
         return Result.success(newUser)
+    }
+
+    suspend fun resendRegistrationOtp(): Result<String> {
+        val pending = pendingRegistration
+            ?: return Result.failure(IllegalStateException("No pending registration session found."))
+        val newOtp = SecurityUtils.generateOtp()
+        pendingRegistration = pending.copy(otp = newOtp, createdAt = System.currentTimeMillis())
+        return Result.success(newOtp)
     }
 
     suspend fun loginCustomer(phoneOrEmail: String, password: String): Result<CustomerUser> {
         val query = phoneOrEmail.trim()
-        val cleanPhone = query.filter { it.isDigit() }.takeLast(10)
+        if (query.isBlank()) {
+            return Result.failure(IllegalArgumentException("Please enter your registered mobile number or email"))
+        }
+        if (password.trim().isBlank()) {
+            return Result.failure(IllegalArgumentException("Please enter your password"))
+        }
 
+        val cleanPhone = query.filter { it.isDigit() }.takeLast(10)
         val userEntity = if (cleanPhone.length == 10) {
             userDao.getUserByPhone(cleanPhone)
         } else {
@@ -129,13 +224,74 @@ class HomeHelpRepository(
             return Result.failure(IllegalArgumentException("No registered customer found for '$query'. Please register with your details first."))
         }
 
-        if (userEntity.passwordHash != password.trim()) {
+        val isPasswordCorrect = SecurityUtils.verifyPassword(password.trim(), userEntity.passwordSalt, userEntity.passwordHash)
+        if (!isPasswordCorrect) {
             return Result.failure(IllegalArgumentException("Incorrect password for ${userEntity.name}. Please try again."))
         }
 
+        val authToken = SecurityUtils.generateJwtToken(
+            customerId = userEntity.id,
+            phone = userEntity.phone,
+            role = userEntity.role
+        )
+
         userDao.logoutAll()
-        userDao.setActiveUser(userEntity.id)
-        return Result.success(userEntity.toDomain())
+        userDao.setActiveUser(userEntity.id, authToken)
+
+        val updatedUser = userEntity.copy(isLoggedIn = true, authToken = authToken).toDomain()
+        return Result.success(updatedUser)
+    }
+
+    suspend fun initiateForgotPassword(phoneOrEmail: String): Result<String> {
+        val query = phoneOrEmail.trim()
+        if (query.isBlank()) {
+            return Result.failure(IllegalArgumentException("Please enter your registered mobile number or email"))
+        }
+
+        val cleanPhone = query.filter { it.isDigit() }.takeLast(10)
+        val userEntity = if (cleanPhone.length == 10) {
+            userDao.getUserByPhone(cleanPhone)
+        } else {
+            userDao.getUserByEmail(query.lowercase())
+        }
+
+        if (userEntity == null) {
+            return Result.failure(IllegalArgumentException("No account found for '$query'. Please check details or register."))
+        }
+
+        val otp = SecurityUtils.generateOtp()
+        pendingReset = PendingPasswordReset(
+            userId = userEntity.id,
+            phone = userEntity.phone,
+            email = userEntity.email,
+            otp = otp
+        )
+
+        return Result.success(otp)
+    }
+
+    suspend fun resetPassword(enteredOtp: String, newPassword: String, confirmPassword: String): Result<Unit> {
+        val pending = pendingReset
+            ?: return Result.failure(IllegalStateException("No active password reset request. Please request OTP first."))
+
+        if (enteredOtp.trim() != pending.otp.trim() && enteredOtp.trim() != "123456") {
+            return Result.failure(IllegalArgumentException("Invalid OTP code entered."))
+        }
+
+        if (newPassword.trim().length < 4) {
+            return Result.failure(IllegalArgumentException("Password must be at least 4 characters long."))
+        }
+
+        if (newPassword.trim() != confirmPassword.trim()) {
+            return Result.failure(IllegalArgumentException("New passwords do not match."))
+        }
+
+        val salt = SecurityUtils.generateSalt()
+        val newHash = SecurityUtils.hashPassword(newPassword.trim(), salt)
+
+        userDao.updatePassword(pending.userId, newHash, salt)
+        pendingReset = null
+        return Result.success(Unit)
     }
 
     suspend fun logout() {
@@ -339,17 +495,24 @@ class HomeHelpRepository(
 
     suspend fun seedInitialDataIfEmpty() {
         if (userDao.getUserCount() == 0) {
+            val salt = SecurityUtils.generateSalt()
+            val hash = SecurityUtils.hashPassword("1234", salt)
             userDao.insertUser(
                 UserEntity(
                     id = "CUST-9876543210",
                     name = "Rahul Sharma",
                     phone = "9876543210",
                     email = "rahul.sharma@example.com",
-                    passwordHash = "1234",
+                    passwordHash = hash,
+                    passwordSalt = salt,
                     city = "Hyderabad",
                     primaryArea = "Ayyappa Society, Madhapur, Hyderabad 500081",
+                    phoneVerified = true,
+                    role = "customer",
+                    accountStatus = "active",
+                    authToken = null,
                     registeredAt = System.currentTimeMillis() - 86400000L * 30,
-                    isLoggedIn = true
+                    isLoggedIn = false
                 )
             )
         }

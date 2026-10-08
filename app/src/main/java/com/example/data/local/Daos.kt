@@ -117,17 +117,23 @@ interface UserDao {
     @Query("SELECT * FROM users ORDER BY registeredAt DESC")
     fun getAllUsers(): Flow<List<UserEntity>>
 
-    @Insert(onConflict = OnConflictStrategy.ABORT)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertUser(user: UserEntity): Long
 
     @Update
     suspend fun updateUser(user: UserEntity)
 
-    @Query("UPDATE users SET isLoggedIn = 0")
+    @Query("UPDATE users SET isLoggedIn = 0, authToken = NULL")
     suspend fun logoutAll()
 
-    @Query("UPDATE users SET isLoggedIn = 1 WHERE id = :id")
-    suspend fun setActiveUser(id: String)
+    @Query("UPDATE users SET isLoggedIn = 1, authToken = :authToken WHERE id = :id")
+    suspend fun setActiveUser(id: String, authToken: String)
+
+    @Query("UPDATE users SET passwordHash = :passwordHash, passwordSalt = :passwordSalt WHERE id = :id")
+    suspend fun updatePassword(id: String, passwordHash: String, passwordSalt: String)
+
+    @Query("UPDATE users SET phoneVerified = :phoneVerified WHERE id = :id")
+    suspend fun updatePhoneVerified(id: String, phoneVerified: Boolean)
 
     @Query("SELECT COUNT(*) FROM users")
     suspend fun getUserCount(): Int

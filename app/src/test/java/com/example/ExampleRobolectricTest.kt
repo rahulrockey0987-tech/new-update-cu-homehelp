@@ -188,4 +188,35 @@ class ExampleRobolectricTest {
         assertNotNull(testBooking.assignedPro)
         assertEquals("Ramesh Reddy", testBooking.address.contactName)
     }
+
+    @Test
+    fun `verify password hashing with salt and security verification`() {
+        val password = "secretPassword123"
+        val salt = com.example.util.SecurityUtils.generateSalt()
+        assertTrue(salt.isNotEmpty())
+
+        val hash1 = com.example.util.SecurityUtils.hashPassword(password, salt)
+        val hash2 = com.example.util.SecurityUtils.hashPassword(password, salt)
+        assertEquals(hash1, hash2)
+
+        // Passwords must never equal raw plaintext
+        assertTrue(hash1 != password)
+
+        // Verification must succeed
+        assertTrue(com.example.util.SecurityUtils.verifyPassword(password, salt, hash1))
+        // Incorrect password must fail
+        assertTrue(!com.example.util.SecurityUtils.verifyPassword("wrongPassword", salt, hash1))
+    }
+
+    @Test
+    fun `verify JWT authentication token generation and validation`() {
+        val customerId = "CUST-9876543210"
+        val phone = "9876543210"
+        val token = com.example.util.SecurityUtils.generateJwtToken(customerId, phone, "customer")
+
+        assertTrue(token.isNotEmpty())
+        val parts = token.split(".")
+        assertEquals(3, parts.size) // header, payload, signature
+        assertTrue(com.example.util.SecurityUtils.isTokenValid(token))
+    }
 }

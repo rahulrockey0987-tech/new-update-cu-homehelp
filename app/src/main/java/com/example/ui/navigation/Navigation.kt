@@ -26,4 +26,8 @@ sealed class Screen(val route: String) {
     data object Support : Screen("support")
     data object Reviews : Screen("reviews")
     data object Auth : Screen("auth")
+    data object Login : Screen("login")
+    data object Register : Screen("register")
+    data object VerifyOtp : Screen("verify_otp")
+    data object ForgotPassword : Screen("forgot_password")
 }

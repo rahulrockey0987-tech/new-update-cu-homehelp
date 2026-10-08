@@ -66,6 +66,20 @@ class HomeHelpViewModel(application: Application) : AndroidViewModel(application
     private val _bookingDraft = MutableStateFlow(BookingDraft())
     val bookingDraft: StateFlow<BookingDraft> = _bookingDraft.asStateFlow()
 
+    // Session & Auth state
+    private val _isSessionChecked = MutableStateFlow(false)
+    val isSessionChecked: StateFlow<Boolean> = _isSessionChecked.asStateFlow()
+
+    // Transient OTP & Auth progress states
+    private val _lastSentOtp = MutableStateFlow<String?>(null)
+    val lastSentOtp: StateFlow<String?> = _lastSentOtp.asStateFlow()
+
+    private val _lastOtpTarget = MutableStateFlow<String?>(null)
+    val lastOtpTarget: StateFlow<String?> = _lastOtpTarget.asStateFlow()
+
+    private val _isAuthenticating = MutableStateFlow(false)
+    val isAuthenticating: StateFlow<Boolean> = _isAuthenticating.asStateFlow()
+
     // Transient UI toast or banner message
     private val _userMessage = MutableStateFlow<String?>(null)
     val userMessage: StateFlow<String?> = _userMessage.asStateFlow()
@@ -82,6 +96,8 @@ class HomeHelpViewModel(application: Application) : AndroidViewModel(application
         )
         viewModelScope.launch {
             repository.seedInitialDataIfEmpty()
+            repository.refreshCustomerProfile()
+            _isSessionChecked.value = true
         }
     }
 
@@ -91,28 +107,72 @@ class HomeHelpViewModel(application: Application) : AndroidViewModel(application
         initialValue = null
     )
 
-    fun registerCustomer(
+    fun initiateRegistration(
         name: String,
         phone: String,
         email: String,
         password: String,
+        confirmPassword: String,
         area: String,
-        onSuccess: () -> Unit,
+        termsAccepted: Boolean,
+        onSuccess: (otp: String) -> Unit,
         onError: (String) -> Unit
     ) {
         viewModelScope.launch {
-            val result = repository.registerCustomer(
+            _isAuthenticating.value = true
+            val result = repository.initiateRegistration(
                 name = name,
                 phone = phone,
                 email = email,
                 password = password,
-                area = area
+                confirmPassword = confirmPassword,
+                area = area,
+                termsAccepted = termsAccepted
             )
+            _isAuthenticating.value = false
+            result.onSuccess { otp ->
+                _lastSentOtp.value = otp
+                _lastOtpTarget.value = phone.filter { it.isDigit() }.takeLast(10)
+                showMessage("SMS OTP sent to +91 ${_lastOtpTarget.value}: $otp")
+                onSuccess(otp)
+            }.onFailure { err ->
+                onError(err.message ?: "Registration validation failed")
+            }
+        }
+    }
+
+    fun verifyOtpAndCompleteRegistration(
+        enteredOtp: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isAuthenticating.value = true
+            val result = repository.verifyOtpAndCompleteRegistration(enteredOtp)
+            _isAuthenticating.value = false
             result.onSuccess { user ->
-                showMessage("Welcome ${user.name}! Registered successfully with Customer ID: ${user.id}")
+                _lastSentOtp.value = null
+                _lastOtpTarget.value = null
+                showMessage("Welcome ${user.name}! Your account has been verified and created.")
                 onSuccess()
             }.onFailure { err ->
-                onError(err.message ?: "Registration failed")
+                onError(err.message ?: "OTP verification failed")
+            }
+        }
+    }
+
+    fun resendRegistrationOtp(
+        onSuccess: (otp: String) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = repository.resendRegistrationOtp()
+            result.onSuccess { otp ->
+                _lastSentOtp.value = otp
+                showMessage("New OTP sent: $otp")
+                onSuccess(otp)
+            }.onFailure { err ->
+                onError(err.message ?: "Could not resend OTP")
             }
         }
     }
@@ -124,7 +184,9 @@ class HomeHelpViewModel(application: Application) : AndroidViewModel(application
         onError: (String) -> Unit
     ) {
         viewModelScope.launch {
+            _isAuthenticating.value = true
             val result = repository.loginCustomer(phoneOrEmail, password)
+            _isAuthenticating.value = false
             result.onSuccess { user ->
                 showMessage("Welcome back, ${user.name}!")
                 onSuccess()
@@ -134,9 +196,53 @@ class HomeHelpViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun initiateForgotPassword(
+        phoneOrEmail: String,
+        onSuccess: (otp: String) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isAuthenticating.value = true
+            val result = repository.initiateForgotPassword(phoneOrEmail)
+            _isAuthenticating.value = false
+            result.onSuccess { otp ->
+                _lastSentOtp.value = otp
+                _lastOtpTarget.value = phoneOrEmail
+                showMessage("Password reset OTP: $otp")
+                onSuccess(otp)
+            }.onFailure { err ->
+                onError(err.message ?: "Could not find account")
+            }
+        }
+    }
+
+    fun verifyOtpAndResetPassword(
+        enteredOtp: String,
+        newPassword: String,
+        confirmPassword: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isAuthenticating.value = true
+            val result = repository.resetPassword(enteredOtp, newPassword, confirmPassword)
+            _isAuthenticating.value = false
+            result.onSuccess {
+                _lastSentOtp.value = null
+                _lastOtpTarget.value = null
+                showMessage("Password updated successfully! Please log in.")
+                onSuccess()
+            }.onFailure { err ->
+                onError(err.message ?: "Password reset failed")
+            }
+        }
+    }
+
     fun logoutCustomer() {
         viewModelScope.launch {
             repository.logout()
+            _lastSentOtp.value = null
+            _lastOtpTarget.value = null
             showMessage("You have logged out successfully")
         }
     }
